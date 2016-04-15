@@ -1,0 +1,38 @@
+# define the start of the contract
+# dates may be given by YYYY-mm-dd, or any format understood by
+# babel.dates.parse_date
+start 1.4.2016
+
+# define how many hours per week you are supposed to work
+set hours_per_week 8
+
+# range entries are consist of a start and end
+# each of start and end consists of a time and optionally a date
+# if it is the first entry in the contract file, the start must contain a date
+# if any of start or end is missing the date, the most recently read date is used
+
+# this is a fully specified range
+2016-04-04 09:00 -- 2016-04-04 12:00
+
+# ranges can also be suffixed with a note. the note is currently unused
+# the format of the node in unspecified, you can put arbitrary text in it, but
+# no newlines, as newlines start a new range
+2016-04-04 13:00 -- 2016-04-04 17:00  worked mostly on foo
+
+
+# we can leave out the date at the end, it will be assumed to be the same as
+# the start
+15.4.2016 09:00 -- 12:00
+
+# as mentioned, it is assumed that this entry is on April 15th
+13:00 -- 17:00
+
+
+# oh and by the way: comments start with a hash sign (#) and may also be in a
+# line with different stuff. everything after a hash will be ignored. this has
+# the unfortunate sideeffect that things like:
+#
+#   set foo "bar baz # fnord"
+#
+# will not do what you intend them to do (it will SyntaxError because of the
+# unterminated string literal)... this may be fixed in the future.
