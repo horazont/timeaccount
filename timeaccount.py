@@ -2,6 +2,7 @@
 import ast
 import pathlib
 import re
+import sys
 
 from datetime import datetime, timedelta
 
@@ -123,7 +124,16 @@ def read_dir(path):
     for file in p.iterdir():
         if file.name.endswith("~"):
             continue
-        filedata = read_file(file.open("r"))
+        try:
+            filedata = read_file(file.open("r"))
+        except ParserError as exc:
+            print("while reading {}".format(file), file=sys.stderr)
+            print("in line {}: {}".format(exc.lineno, exc.linecontent))
+            if exc.msg:
+                print("  {}".format(exc.msg))
+            if exc.__context__:
+                print("  {}".format(exc.__context__))
+            continue
         filedata["name"] = file
         yield filedata
 
