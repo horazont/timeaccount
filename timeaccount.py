@@ -12,7 +12,7 @@ import babel.dates
 SET_RE = re.compile(r"set\s+(?P<key>[0-9A-Za-z_]+)\s+(?P<value>.+)")
 START_END_RE = re.compile(r"(?P<key>start|end)\s+(?P<value>.+)")
 COMMENT_STRIP_RE = re.compile(r"([^#]*)#.*")
-RANGE_RE = re.compile(r"\s*(?P<start>[0-9.: -]+)\s*--\s*(?P<end>[0-9.: -]+)\s*(?P<note>.*)")
+RANGE_RE = re.compile(r"\s*(?P<start>[0-9.: -]+)\s*(--|–)\s*(?P<end>[0-9.: -]+)\s*(?P<note>.*)")
 
 WORKDAYS = [0, 1, 2, 3, 4]
 
