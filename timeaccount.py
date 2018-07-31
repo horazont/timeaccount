@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 import ast
+import itertools
 import pathlib
 import re
 import sys
@@ -12,7 +13,7 @@ import babel.dates
 SET_RE = re.compile(r"set\s+(?P<key>[0-9A-Za-z_]+)\s+(?P<value>.+)")
 START_END_RE = re.compile(r"(?P<key>start|end)\s+(?P<value>.+)")
 COMMENT_STRIP_RE = re.compile(r"([^#]*)#.*")
-RANGE_RE = re.compile(r"\s*(?P<start>[0-9.: -]+)\s*(--|–)\s*(?P<end>[0-9.: -]+)\s*(?P<note>.*)")
+RANGE_RE = re.compile(r"\s*(?P<start>[0-9.: -]+)\s*(--|–)\s*(?P<end>[0-9.: -]+|now)\s*(?P<note>.*)")
 
 WORKDAYS = [0, 1, 2, 3, 4]
 
@@ -27,8 +28,11 @@ def process_set(match, filedata):
 def process_start_end(match, filedata):
     d = match.groupdict()
     date = parse_date(d["value"])
-    filedata[d["key"]] = datetime(year=date.year, month=date.month,
-                                  day=date.day)
+    key = d["key"]
+    dt = datetime(year=date.year, month=date.month, day=date.day)
+    if key == "end":
+        dt += timedelta(days=1)
+    filedata[d["key"]] = dt
 
 
 def process_range(match, filedata):
@@ -65,6 +69,8 @@ def parse_date(s):
 
 def parse_datetime(s, reference_datetime=None):
     parts = s.strip().split(" ", 1)
+    if len(parts) == 1 and parts[0] == "now":
+        return datetime.now()
     if reference_datetime and len(parts) == 1:
         date = reference_datetime.date()
         time = parse_time(parts[0])
@@ -124,6 +130,8 @@ def read_dir(path):
     for file in p.iterdir():
         if file.name.endswith("~"):
             continue
+        if file.is_dir():
+            continue
         try:
             filedata = read_file(file.open("r"))
         except ParserError as exc:
@@ -146,15 +154,23 @@ def finalize_data(data):
 
     data["total_hours"] = total_hours
 
-    if data["end"] is None:
+    if data["end"] is None or data["end"] >= datetime.now():
         end_of_week = datetime.now().replace(hour=0, minute=0, second=0,
                                              microsecond=0)
         end_of_week += timedelta(days=7-(end_of_week.weekday()))
         weeks = get_weeks(data["start"], end_of_week)
         data["hours_to_weekend"] = weeks * data["settings"]["hours_per_week"]
-    else:
+    if data["end"] is not None:
         weeks = get_weeks(data["start"], data["end"])
         data["hours_to_end"] = weeks * data["settings"]["hours_per_week"]
+
+
+def startkey(r):
+    return r[0]
+
+
+def startdaykey(r):
+    return r[0].replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 if __name__ == "__main__":
@@ -162,15 +178,47 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        "--daily",
+        action="store_true",
+        default=False,
+    )
+    parser.add_argument(
         "indir",
     )
 
     args = parser.parse_args()
 
+    now = datetime.utcnow()
+
     for filedata in read_dir(args.indir):
         finalize_data(filedata)
-        if filedata["end"] is None:
+
+        if args.daily and (filedata["end"] is None or filedata["end"] >= now):
+            prevmonth = None
+            monthtotal = timedelta()
+            for day, subranges in itertools.groupby(
+                    sorted(filedata["ranges"], key=startkey),
+                    startdaykey):
+
+                if prevmonth is None:
+                    prevmonth = day.replace(day=1)
+                if day.replace(day=1) != prevmonth:
+                    prevmonth = day.replace(day=1)
+                    print("month:", monthtotal)
+                    monthtotal = timedelta()
+
+                daytotal = sum((r[1]-r[0] for r in subranges), timedelta())
+                print(day.date(), daytotal)
+                monthtotal += daytotal
+
+        if filedata["end"] is None or filedata["end"] >= now:
             print("in {}: {:.2f}h missing until weekend".format(
                 filedata["name"].parts[-1],
                 filedata["hours_to_weekend"] - filedata["total_hours"]
+            ))
+
+        if filedata["end"] is not None and filedata["end"] >= now:
+            print("in {}: {:.2f}h missing until end of contract".format(
+                filedata["name"].parts[-1],
+                filedata["hours_to_end"] - filedata["total_hours"]
             ))
