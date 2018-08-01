@@ -11,9 +11,11 @@ import babel.dates
 
 
 SET_RE = re.compile(r"set\s+(?P<key>[0-9A-Za-z_]+)\s+(?P<value>.+)")
-START_END_RE = re.compile(r"(?P<key>start|end)\s+(?P<value>.+)")
+START_END_RE = re.compile(r"^\s*(?P<key>start|end)\s+(?P<value>.+)$")
 COMMENT_STRIP_RE = re.compile(r"([^#]*)#.*")
-RANGE_RE = re.compile(r"\s*(?P<start>[0-9.: -]+)\s*(--|–)\s*(?P<end>[0-9.: -]+|now)\s*(?P<note>.*)")
+RANGE_RE = re.compile(r"^\s*(?P<start>[0-9.: -]+)\s*(--|–)\s*(?P<end>[0-9.: -]+|now)\s*(?P<note>.*)$")
+KEYED_NOTE_RE = re.compile("^\[(?P<id>[0-9]+)\]\s*(?P<note>.*)$")
+SQUASH_RE = re.compile(r"^\s*squashed\s+(?P<timedelta>(?P<hours>[0-9]+):(?P<minutes>[0-9]{2}):(?P<seconds>[0-9]{2}(\.[0-9]*)?))\s*$")
 
 WORKDAYS = [0, 1, 2, 3, 4]
 
@@ -40,16 +42,39 @@ def process_range(match, filedata):
     start = parse_datetime(d["start"],
                            filedata.setdefault("state", {}).get("prevdate"))
     end = parse_datetime(d["end"], start)
+
+    keyed_note_match = KEYED_NOTE_RE.match(d["note"].strip())
+    if keyed_note_match is not None:
+        note_d = keyed_note_match.groupdict()
+        id_ = int(note_d["id"])
+        filedata.setdefault("idmap", {}).setdefault(id_,
+                                                    note_d["note"])
+    else:
+        id_ = None
+
     filedata.setdefault("ranges", []).append(
-        (start, end)
+        (start, end, id_)
     )
     filedata["state"]["prevdate"] = start
+
+
+def process_squash(match, filedata):
+    d = match.groupdict()
+    td = timedelta(
+        hours=int(d["hours"]),
+        minutes=int(d["minutes"]),
+        seconds=float(d["seconds"]),
+    )
+    filedata.setdefault("squashes", []).append(
+        td
+    )
 
 
 PARSER = [
     (START_END_RE, process_start_end),
     (SET_RE, process_set),
     (RANGE_RE, process_range),
+    (SQUASH_RE, process_squash),
 ]
 
 
@@ -127,7 +152,7 @@ def read_file(initer):
 
 def read_dir(path):
     p = pathlib.Path(path).absolute()
-    for file in p.iterdir():
+    for file in sorted(p.iterdir()):
         if file.name.endswith("~"):
             continue
         if file.is_dir():
@@ -147,19 +172,37 @@ def read_dir(path):
 
 
 def finalize_data(data):
+    data["daily_ids"] = {}
+
     total_hours = 0
-    for entry in data["ranges"]:
-        start, end = entry
-        total_hours += (end - start).total_seconds() / 3600
+    for entry in data.get("ranges", []):
+        start, end, id_ = entry
+        this_hours = (end - start).total_seconds() / 3600
+        total_hours += this_hours
+        if id_ is not None:
+            day = start.replace(hour=0, minute=0, second=0, microsecond=0)
+            daymap = data["daily_ids"].setdefault(day, {})
+            daymap.setdefault(id_, 0)
+            daymap[id_] += this_hours
+
+    for squash in data.get("squashes", []):
+        total_hours += squash.total_seconds() / 3600
 
     data["total_hours"] = total_hours
 
     if data["end"] is None or data["end"] >= datetime.now():
-        end_of_week = datetime.now().replace(hour=0, minute=0, second=0,
-                                             microsecond=0)
-        end_of_week += timedelta(days=7-(end_of_week.weekday()))
-        weeks = get_weeks(data["start"], end_of_week)
-        data["hours_to_weekend"] = weeks * data["settings"]["hours_per_week"]
+        today = datetime.now().replace(hour=0, minute=0, second=0,
+                                       microsecond=0)
+        end_of_day = today + timedelta(days=1)
+        end_of_week = today + timedelta(days=7-(today.weekday()))
+
+        if data["end"] is None or end_of_week <= data["end"]:
+            weeks = get_weeks(data["start"], end_of_week)
+            data["hours_to_weekend"] = weeks * data["settings"]["hours_per_week"]
+
+        if (data["end"] is None or end_of_day <= data["end"]) and data["settings"]["hours_per_day"]:
+            days = (end_of_day - data["start"]).days
+            data["hours_to_night"] = days * data["settings"]["hours_per_day"]
     if data["end"] is not None:
         weeks = get_weeks(data["start"], data["end"])
         data["hours_to_end"] = weeks * data["settings"]["hours_per_week"]
@@ -179,6 +222,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--daily",
+        action="store_true",
+        default=False,
+    )
+    parser.add_argument(
+        "--squash",
         action="store_true",
         default=False,
     )
@@ -208,17 +256,52 @@ if __name__ == "__main__":
                     monthtotal = timedelta()
 
                 daytotal = sum((r[1]-r[0] for r in subranges), timedelta())
-                print(day.date(), daytotal)
+                try:
+                    daymap = filedata["daily_ids"][day]
+                except KeyError:
+                    pass
+                else:
+                    for id_, hours in sorted(daymap.items()):
+                        print(day.date(), "{:04d} {}".format(id_, timedelta(hours=hours)))
+                print(day.date(), "total", daytotal)
+
                 monthtotal += daytotal
 
-        if filedata["end"] is None or filedata["end"] >= now:
-            print("in {}: {:.2f}h missing until weekend".format(
+        try:
+            until_eod = filedata["hours_to_night"]
+        except KeyError:
+            pass
+        else:
+            print("in {}: {}h missing until end of day".format(
                 filedata["name"].parts[-1],
-                filedata["hours_to_weekend"] - filedata["total_hours"]
+                timedelta(hours=until_eod - filedata["total_hours"])
             ))
 
-        if filedata["end"] is not None and filedata["end"] >= now:
-            print("in {}: {:.2f}h missing until end of contract".format(
+        try:
+            until_weekend = filedata["hours_to_weekend"]
+        except KeyError:
+            pass
+        else:
+            print("in {}: {}h missing until weekend".format(
                 filedata["name"].parts[-1],
-                filedata["hours_to_end"] - filedata["total_hours"]
+                timedelta(hours=until_weekend - filedata["total_hours"])
+            ))
+
+        try:
+            until_eoc = filedata["hours_to_end"]
+        except KeyError:
+            pass
+        else:
+            if filedata["end"] >= datetime.now():
+                print("in {}: {}h missing until end of contract".format(
+                    filedata["name"].parts[-1],
+                    timedelta(hours=until_eoc - filedata["total_hours"])
+                ))
+
+        if args.squash:
+            hours, rem = divmod(filedata["total_hours"] * 3600, 3600)
+            minutes, seconds = divmod(rem, 60)
+            print("{}: squash {:02.0f}:{:02.0f}:{:06.3f}".format(
+                filedata["name"].parts[-1],
+                hours, minutes, seconds,
             ))
