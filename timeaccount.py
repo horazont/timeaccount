@@ -113,6 +113,53 @@ def get_weeks(from_start, to_end):
     return (to_end - from_start).days / 7
 
 
+def get_workdays(from_start, to_end):
+    from_start = from_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    to_end = to_end.replace(hour=0, minute=0, second=0, microsecond=0)
+    if from_start == to_end:
+        return 0
+    elif from_start >= to_end:
+        return -get_workdays(to_end, from_start)
+
+    days = 0
+
+    if from_start.weekday() != 0:
+        if from_start.weekday() < 5:
+            days += min(5 - from_start.weekday(),
+                        (to_end - from_start).days)
+
+        # it’s on a monday now
+        from_start += timedelta(days=7-from_start.weekday())
+        assert from_start.weekday() == 0
+
+    if from_start >= to_end:
+        return days
+
+    if to_end.weekday() != 0:
+        if to_end.weekday() > 5:
+            to_end -= timedelta(days=to_end.weekday() - 5)
+        days += min(to_end.weekday(),
+                    (to_end - from_start).days)
+        to_end -= timedelta(days=to_end.weekday())
+        assert to_end.weekday() == 0
+
+    weeks = get_weeks(from_start, to_end)
+    assert int(weeks) == weeks
+    days += int(weeks) * 5
+    return days
+
+
+
+assert get_workdays(datetime(2018, 8, 1), datetime(2018, 8, 2)) == 1
+assert get_workdays(datetime(2018, 8, 1), datetime(2018, 8, 3)) == 2
+assert get_workdays(datetime(2018, 8, 1), datetime(2018, 8, 4)) == 3
+assert get_workdays(datetime(2018, 8, 1), datetime(2018, 8, 5)) == 3
+assert get_workdays(datetime(2018, 8, 1), datetime(2018, 8, 6)) == 3
+assert get_workdays(datetime(2018, 8, 1), datetime(2018, 8, 7)) == 4
+assert get_workdays(datetime(2018, 8, 1), datetime(2018, 8, 13)) == 8
+assert get_workdays(datetime(2018, 8, 13), datetime(2018, 8, 20)) == 5
+
+
 class ParserError(ValueError):
     def __init__(self, lineno, linecontent, msg=None):
         super().__init__("failed to parse line {}".format(lineno))
@@ -197,11 +244,13 @@ def finalize_data(data):
         end_of_week = today + timedelta(days=7-(today.weekday()))
 
         if data["end"] is None or end_of_week <= data["end"]:
-            weeks = get_weeks(data["start"], end_of_week)
-            data["hours_to_weekend"] = weeks * data["settings"]["hours_per_week"]
+            # weeks = get_weeks(data["start"], end_of_week)
+            # data["hours_to_weekend"] = weeks * data["settings"]["hours_per_week"]
+            days_until_eow = get_workdays(data["start"], end_of_week)
+            data["hours_to_weekend"] = days_until_eow * data["settings"]["hours_per_day"]
 
         if (data["end"] is None or end_of_day <= data["end"]) and data["settings"]["hours_per_day"]:
-            days = (end_of_day - data["start"]).days
+            days = get_workdays(data["start"], end_of_day)
             data["hours_to_night"] = days * data["settings"]["hours_per_day"]
     if data["end"] is not None:
         weeks = get_weeks(data["start"], data["end"])
@@ -214,6 +263,18 @@ def startkey(r):
 
 def startdaykey(r):
     return r[0].replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def round_timedelta(td):
+    return timedelta(seconds=round(td.total_seconds()))
+
+
+def hour_timedelta(td, precision=0):
+    hours, rem = divmod(td.total_seconds(), 3600)
+    minutes, seconds = divmod(rem, 60)
+    return "{{:.0f}}:{{:02.0f}}:{{:0{}.{}f}}".format(precision+(3 if precision > 0 else 2), precision).format(
+        hours, minutes, seconds,
+    )
 
 
 if __name__ == "__main__":
@@ -272,10 +333,23 @@ if __name__ == "__main__":
         except KeyError:
             pass
         else:
-            print("in {}: {}h missing until end of day".format(
-                filedata["name"].parts[-1],
-                timedelta(hours=until_eod - filedata["total_hours"])
-            ))
+            until_eod_td = timedelta(hours=until_eod - filedata["total_hours"])
+            if until_eod_td >= timedelta():
+                endtime = " (~= {})".format(
+                    (datetime.now() + until_eod_td).time().replace(microsecond=0)
+                )
+                print("in {}: {}h missing until end of day{}".format(
+                    filedata["name"].parts[-1],
+                    hour_timedelta(round_timedelta(until_eod_td)),
+                    endtime,
+                ))
+            else:
+                print("in {}: {}h overtime today".format(
+                    filedata["name"].parts[-1],
+                    hour_timedelta(round_timedelta(-until_eod_td)),
+
+                ))
+
 
         try:
             until_weekend = filedata["hours_to_weekend"]
@@ -284,7 +358,7 @@ if __name__ == "__main__":
         else:
             print("in {}: {}h missing until weekend".format(
                 filedata["name"].parts[-1],
-                timedelta(hours=until_weekend - filedata["total_hours"])
+                hour_timedelta(round_timedelta(timedelta(hours=until_weekend - filedata["total_hours"])))
             ))
 
         try:
@@ -295,13 +369,11 @@ if __name__ == "__main__":
             if filedata["end"] >= datetime.now():
                 print("in {}: {}h missing until end of contract".format(
                     filedata["name"].parts[-1],
-                    timedelta(hours=until_eoc - filedata["total_hours"])
+                    hour_timedelta(round_timedelta(timedelta(hours=until_eoc - filedata["total_hours"])))
                 ))
 
         if args.squash:
-            hours, rem = divmod(filedata["total_hours"] * 3600, 3600)
-            minutes, seconds = divmod(rem, 60)
-            print("{}: squash {:02.0f}:{:02.0f}:{:06.3f}".format(
+            print("{}: squash {}".format(
                 filedata["name"].parts[-1],
-                hours, minutes, seconds,
+                hour_timedelta(timedelta(hours=filedata["total_hours"]))
             ))
