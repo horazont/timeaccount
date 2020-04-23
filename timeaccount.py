@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 import ast
+import collections
 import itertools
 import pathlib
 import re
@@ -277,12 +278,22 @@ def hour_timedelta(td, precision=0):
     )
 
 
+def dump_project_hours(mapping):
+    for id_, hours in sorted(mapping.items()):
+        print("  ID {:04d}  {:.2f}".format(id_, hours.total_seconds() / 3600))
+
+
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--daily",
+        action="store_true",
+        default=False,
+    )
+    parser.add_argument(
+        "--monthly",
         action="store_true",
         default=False,
     )
@@ -311,10 +322,14 @@ if __name__ == "__main__":
 
                 if prevmonth is None:
                     prevmonth = day.replace(day=1)
+                    monthly_project_hours = collections.defaultdict(timedelta)
                 if day.replace(day=1) != prevmonth:
                     prevmonth = day.replace(day=1)
                     print("month:", monthtotal)
+                    if args.monthly:
+                        dump_project_hours(monthly_project_hours)
                     monthtotal = timedelta()
+                    monthly_project_hours = collections.defaultdict(timedelta)
 
                 daytotal = sum((r[1]-r[0] for r in subranges), timedelta())
                 try:
@@ -323,10 +338,15 @@ if __name__ == "__main__":
                     pass
                 else:
                     for id_, hours in sorted(daymap.items()):
+                        monthly_project_hours[id_] += timedelta(hours=hours)
                         print(day.date(), "{:04d} {}".format(id_, timedelta(hours=hours)))
                 print(day.date(), "total", daytotal)
 
                 monthtotal += daytotal
+
+            if prevmonth is not None and args.monthly:
+                print("month:", monthtotal)
+                dump_project_hours(monthly_project_hours)
 
         try:
             until_eod = filedata["hours_to_night"]
