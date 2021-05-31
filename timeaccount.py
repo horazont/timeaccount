@@ -15,7 +15,7 @@ SET_RE = re.compile(r"set\s+(?P<key>[0-9A-Za-z_]+)\s+(?P<value>.+)")
 START_END_RE = re.compile(r"^\s*(?P<key>start|end)\s+(?P<value>.+)$")
 COMMENT_STRIP_RE = re.compile(r"([^#]*)#.*")
 RANGE_RE = re.compile(r"^\s*(?P<start>[0-9.: -]+)\s*(--|–)\s*(?P<end>[0-9.: -]+|now)\s*(?P<note>.*)$")
-KEYED_NOTE_RE = re.compile("^\[(?P<id>[0-9]+)\]\s*(?P<note>.*)$")
+KEYED_NOTE_RE = re.compile(r"^\[(?P<id>[0-9]+)(/(?P<task>[\w\d\s]+))?\]\s*(?P<note>.*)$")
 SQUASH_RE = re.compile(r"^\s*squashed\s+(?P<timedelta>(?P<hours>[0-9]+):(?P<minutes>[0-9]{2}):(?P<seconds>[0-9]{2}(\.[0-9]*)?))\s*$")
 
 WORKDAYS = [0, 1, 2, 3, 4]
@@ -47,11 +47,11 @@ def process_range(match, filedata):
     keyed_note_match = KEYED_NOTE_RE.match(d["note"].strip())
     if keyed_note_match is not None:
         note_d = keyed_note_match.groupdict()
-        id_ = int(note_d["id"])
+        id_ = int(note_d["id"]), note_d["task"]
         filedata.setdefault("idmap", {}).setdefault(id_,
                                                     note_d["note"])
     else:
-        id_ = None
+        id_ = (None, None)
 
     filedata.setdefault("ranges", []).append(
         (start, end, id_)
@@ -250,7 +250,7 @@ def finalize_data(data):
             days_until_eow = get_workdays(data["start"], end_of_week)
             data["hours_to_weekend"] = days_until_eow * data["settings"]["hours_per_day"]
 
-        if (data["end"] is None or end_of_day <= data["end"]) and data["settings"]["hours_per_day"]:
+        if (data["end"] is None or end_of_day <= data["end"]) and data["settings"]["hours_per_day"] is not None:
             days = get_workdays(data["start"], end_of_day)
             data["hours_to_night"] = days * data["settings"]["hours_per_day"]
     if data["end"] is not None:
@@ -337,9 +337,9 @@ if __name__ == "__main__":
                 except KeyError:
                     pass
                 else:
-                    for id_, hours in sorted(daymap.items()):
-                        monthly_project_hours[id_] += timedelta(hours=hours)
-                        print(day.date(), "{:04d} {}".format(id_, timedelta(hours=hours)))
+                    for (id_, task), hours in sorted(daymap.items()):
+                        monthly_project_hours[id_, task] += timedelta(hours=hours)
+                        print(day.date(), "{:04d}{} {}".format(id_, "/{}".format(task) if task else "", timedelta(hours=hours)))
                 print(day.date(), "total", daytotal)
 
                 monthtotal += daytotal
