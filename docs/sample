@@ -37,3 +37,14 @@ set hours_per_week 8
 #
 # will not do what you intend them to do (it will SyntaxError because of the
 # unterminated string literal)... this may be fixed in the future.
+
+# PROJECTS AND TASKS
+#
+# recently™, timeaccount gained support for numerically-identified projects
+# and subtasks. they are specified in square brackets in the note:
+
+2022-11-21  09:00 -- 10:00  [1234] did a thing for that project
+2022-11-21  10:00 -- 11:00  [90000/over-ninethousand] did a thing for this subtask
+
+# `timeaccount --daily` will aggregate the output by project-id / subtask
+# tuples
