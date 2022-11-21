@@ -337,7 +337,7 @@ if __name__ == "__main__":
                 except KeyError:
                     pass
                 else:
-                    for (id_, task), hours in sorted(daymap.items()):
+                    for (id_, task), hours in sorted(daymap.items(), key=lambda x: ((x[0][0], x[0][1] or ""), x[1])):
                         monthly_project_hours[id_, task] += timedelta(hours=hours)
                         print(day.date(), "{:04d}{} {}".format(id_, "/{}".format(task) if task else "", timedelta(hours=hours)))
                 print(day.date(), "total", daytotal)
